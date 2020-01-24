@@ -45,20 +45,19 @@ let result: String = whois.lookup(WhoIsLookupOptions::from_string("magiclen.org"
 ```
 */
 
-pub extern crate idna;
-extern crate regex;
-pub extern crate serde_json;
-pub extern crate validators;
+pub use idna;
+use lazy_static::lazy_static;
+pub use serde_json;
+pub use validators;
 
-#[macro_use]
-extern crate lazy_static;
-
-use std::collections::HashMap;
-use std::fs::File;
-use async_std::io::{self, Read, Write};
+use async_std::fs::File;
+use async_std::future::{timeout as async_timeout, TimeoutError};
 use async_std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use async_std::io::prelude::{ReadExt, WriteExt};
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
+use thiserror::Error;
 
 use serde_json::{Map, Value};
 use validators::domain::{DomainError, DomainUnlocalhostableWithoutPort};
@@ -76,50 +75,24 @@ lazy_static! {
     };
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum WhoIsError {
-    SerdeJsonError(serde_json::Error),
-    IOError(io::Error),
-    DomainError(DomainError),
-    IPv4Error(IPv4Error),
-    IPv6Error(IPv6Error),
-    /// This kind of errors is recommended to be panic!
-    MapError(&'static str),
-}
-
-impl From<serde_json::Error> for WhoIsError {
-    #[inline]
-    fn from(err: serde_json::Error) -> Self {
-        WhoIsError::SerdeJsonError(err)
-    }
-}
-
-impl From<io::Error> for WhoIsError {
-    #[inline]
-    fn from(err: io::Error) -> Self {
-        WhoIsError::IOError(err)
-    }
-}
-
-impl From<DomainError> for WhoIsError {
-    #[inline]
-    fn from(err: DomainError) -> Self {
-        WhoIsError::DomainError(err)
-    }
-}
-
-impl From<IPv4Error> for WhoIsError {
-    #[inline]
-    fn from(err: IPv4Error) -> Self {
-        WhoIsError::IPv4Error(err)
-    }
-}
-
-impl From<IPv6Error> for WhoIsError {
-    #[inline]
-    fn from(err: IPv6Error) -> Self {
-        WhoIsError::IPv6Error(err)
-    }
+    #[error("SerdeJsonError {0}")]
+    SerdeJsonError(#[from] serde_json::Error),
+    #[error("IOError {0}")]
+    IOError(#[from] std::io::Error),
+    #[error("DomainError {0}")]
+    DomainError(#[from] DomainError),
+    #[error("IPv4Error {0}")]
+    IPv4Error(#[from] IPv4Error),
+    #[error("IPv6Error {0}")]
+    IPv6Error(#[from] IPv6Error),
+    #[error("TimeoutError {0}")]
+    TimeoutError(#[from] TimeoutError),
+    #[error("MapError {0}")]
+    MapError(String),
+    #[error("Should Retry")]
+    RetryError(WhoIsServerValue, u16),
 }
 
 #[derive(Debug)]
@@ -158,14 +131,14 @@ impl WhoIsServerValue {
                     if let Some(host) = host.as_str() {
                         let host = match HostLocalable::from_str(host) {
                             Ok(host) => host,
-                            Err(_) => return Err(WhoIsError::MapError("The server value is an object, but it has not a correct host string."))
+                            Err(_) => return Err(WhoIsError::MapError("The server value is an object, but it has not a correct host string.".to_string()))
                         };
                         let query = match obj.get("query") {
                             Some(query) => {
                                 if let Some(query) = query.as_str() {
                                     Some(query.to_string())
                                 } else {
-                                    return Err(WhoIsError::MapError("The server value is an object, but it has an incorrect query string."));
+                                    return Err(WhoIsError::MapError("The server value is an object, but it has an incorrect query string.".to_string()));
                                 }
                             }
                             None => None,
@@ -175,7 +148,7 @@ impl WhoIsServerValue {
                                 if let Some(punycode) = punycode.as_bool() {
                                     punycode
                                 } else {
-                                    return Err(WhoIsError::MapError("The server value is an object, but it has an incorrect punycode boolean value."));
+                                    return Err(WhoIsError::MapError("The server value is an object, but it has an incorrect punycode boolean value.".to_string()));
                                 }
                             }
                             None => DEFAULT_PUNYCODE,
@@ -187,20 +160,21 @@ impl WhoIsServerValue {
                         })
                     } else {
                         Err(WhoIsError::MapError(
-                            "The server value is an object, but it has not a host string.",
+                            "The server value is an object, but it has not a host string."
+                                .to_string(),
                         ))
                     }
                 }
-                None => {
-                    Err(WhoIsError::MapError(
-                        "The server value is an object, but it has not a host string.",
-                    ))
-                }
+                None => Err(WhoIsError::MapError(
+                    "The server value is an object, but it has not a host string.".to_string(),
+                )),
             }
         } else if let Some(host) = value.as_str() {
             Self::from_string(host)
         } else {
-            Err(WhoIsError::MapError("The server value is not an object or a host string."))
+            Err(WhoIsError::MapError(
+                "The server value is not an object or a host string.".to_string(),
+            ))
         }
     }
 
@@ -209,7 +183,9 @@ impl WhoIsServerValue {
         let host = match HostLocalable::from_str(host) {
             Ok(host) => host,
             Err(_) => {
-                return Err(WhoIsError::MapError("The server value is not a correct host string."))
+                return Err(WhoIsError::MapError(
+                    "The server value is not a correct host string.".to_string(),
+                ))
             }
         };
         Ok(WhoIsServerValue {
@@ -266,12 +242,10 @@ impl WhoIsLookupOptions {
     pub fn from_string<S: AsRef<str>>(string: S) -> Result<WhoIsLookupOptions, WhoIsError> {
         match Self::from_ipv4(&string) {
             Ok(opt) => Ok(opt),
-            Err(_) => {
-                match Self::from_ipv6(&string) {
-                    Ok(opt) => Ok(opt),
-                    Err(_) => Self::from_domain(&string),
-                }
-            }
+            Err(_) => match Self::from_ipv6(&string) {
+                Ok(opt) => Ok(opt),
+                Err(_) => Self::from_domain(&string),
+            },
         }
     }
 }
@@ -285,12 +259,14 @@ pub struct WhoIs {
 
 impl WhoIs {
     /// Read the list of WHOIS servers (JSON data) from a file to create a `WhoIs` instance.
-    pub fn from_path<P: AsRef<Path>>(path: P) -> Result<WhoIs, WhoIsError> {
+    pub async fn from_path<P: AsRef<Path>>(path: P) -> Result<WhoIs, WhoIsError> {
         let path = path.as_ref();
 
-        let file = File::open(path)?;
+        let mut file = File::open(path).await?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).await?;
 
-        let map: Map<String, Value> = serde_json::from_reader(file)?;
+        let map: Map<String, Value> = serde_json::from_slice(&buf)?;
 
         Self::from_inner(map)
     }
@@ -308,25 +284,27 @@ impl WhoIs {
         let ip = match map.remove("_") {
             Some(server) => {
                 if !server.is_object() {
-                    return Err(WhoIsError::MapError("`_` in the server list is not an object."));
+                    return Err(WhoIsError::MapError(
+                        "`_` in the server list is not an object.".to_string(),
+                    ));
                 }
                 match server.get("ip") {
                     Some(server) => {
                         if server.is_null() {
                             return Err(WhoIsError::MapError(
-                                "`ip` in the `_` object in the server list is null.",
+                                "`ip` in the `_` object in the server list is null.".to_string(),
                             ));
                         }
                         WhoIsServerValue::from_value(server)?
                     }
                     None => {
                         return Err(WhoIsError::MapError(
-                            "Cannot find `ip` in the `_` object in the server list.",
+                            "Cannot find `ip` in the `_` object in the server list.".to_string(),
                         ))
                     }
                 }
             }
-            None => return Err(WhoIsError::MapError("Cannot find `_` in the server list.")),
+            None => return Err(WhoIsError::MapError("Cannot find `_` in the server list.".to_string())),
         };
 
         let mut new_map: HashMap<String, WhoIsServerValue> = HashMap::with_capacity(map.len());
@@ -344,7 +322,14 @@ impl WhoIs {
         })
     }
 
-    fn lookup_inner(
+    async fn connect_timeout(
+        addr: &SocketAddr,
+        timeout: Duration,
+    ) -> Result<TcpStream, WhoIsError> {
+        async_timeout(timeout, TcpStream::connect(addr)).await?.map_err(Into::into)
+    }
+
+    async fn _lookup_inner(
         server: &WhoIsServerValue,
         text: &str,
         timeout: Option<Duration>,
@@ -375,12 +360,12 @@ impl WhoIs {
         };
 
         let mut client = if let Some(timeout) = timeout {
-            let socket_addrs: Vec<SocketAddr> = addr.to_socket_addrs()?.collect();
+            let socket_addrs: Vec<SocketAddr> = addr.to_socket_addrs().await?.collect();
 
             let mut client = None;
 
             for socket_addr in socket_addrs.iter().take(socket_addrs.len() - 1) {
-                if let Ok(c) = TcpStream::connect_timeout(&socket_addr, timeout) {
+                if let Ok(c) = Self::connect_timeout(&socket_addr, timeout).await {
                     client = Some(c);
                     break;
                 }
@@ -390,27 +375,27 @@ impl WhoIs {
                 client
             } else {
                 let socket_addr = &socket_addrs[socket_addrs.len() - 1];
-                TcpStream::connect_timeout(&socket_addr, timeout)?
+                Self::connect_timeout(&socket_addr, timeout).await?
             };
 
-            client.set_read_timeout(Some(timeout))?;
-            client.set_write_timeout(Some(timeout))?;
+            // client.set_read_timeout(Some(timeout))?;
+            // client.set_write_timeout(Some(timeout))?;
             client
         } else {
-            TcpStream::connect(&addr)?
+            TcpStream::connect(&addr).await?
         };
 
         if let Some(query) = &server.query {
-            client.write_all(query.replace("$addr", text).as_bytes())?;
+            client.write_all(query.replace("$addr", text).as_bytes()).await?;
         } else {
-            client.write_all(DEFAULT_WHOIS_HOST_QUERY.replace("$addr", text).as_bytes())?;
+            client.write_all(DEFAULT_WHOIS_HOST_QUERY.replace("$addr", text).as_bytes()).await?;
         }
 
-        client.flush()?;
+        client.flush().await?;
 
         let mut query_result = String::new();
 
-        client.read_to_string(&mut query_result)?;
+        client.read_to_string(&mut query_result).await?;
 
         if follow > 0 {
             if let Some(c) = REF_SERVER_RE.captures(&query_result) {
@@ -418,7 +403,7 @@ impl WhoIs {
                     let h = h.as_str();
                     if h.ne(&addr) {
                         if let Ok(server) = WhoIsServerValue::from_string(h) {
-                            return Self::lookup_inner(&server, text, timeout, follow - 1);
+                            return Err(WhoIsError::RetryError(server, follow - 1));
                         }
                     }
                 }
@@ -428,22 +413,43 @@ impl WhoIs {
         Ok(query_result)
     }
 
+    async fn lookup_inner(
+        server: &WhoIsServerValue,
+        text: &str,
+        timeout: Option<Duration>,
+        follow: u16,
+    ) -> Result<String, WhoIsError> {
+        let mut follow = follow;
+        let mut server = server.clone();
+        while follow > 0 {
+            match Self::_lookup_inner(&server, text, timeout, follow).await {
+                Ok(x) => return Ok(x),
+                Err(WhoIsError::RetryError(s, f)) => {
+                    server = s;
+                    follow = f;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(WhoIsError::MapError("Max follow".to_string()))
+    }
+
     /// Lookup a domain or an IP.
-    pub fn lookup(&self, options: WhoIsLookupOptions) -> Result<String, WhoIsError> {
+    pub async fn lookup(&self, options: WhoIsLookupOptions) -> Result<String, WhoIsError> {
         match &options.target {
             Target::IPv4(ipv4) => {
                 let server = match &options.server {
                     Some(server) => server,
                     None => &self.ip,
                 };
-                Self::lookup_inner(server, ipv4.get_full_ipv4(), options.timeout, options.follow)
+                Self::lookup_inner(server, ipv4.get_full_ipv4(), options.timeout, options.follow).await
             }
             Target::IPv6(ipv6) => {
                 let server = match &options.server {
                     Some(server) => server,
                     None => &self.ip,
                 };
-                Self::lookup_inner(server, ipv6.get_full_ipv6(), options.timeout, options.follow)
+                Self::lookup_inner(server, ipv6.get_full_ipv6(), options.timeout, options.follow).await
             }
             Target::Domain(domain) => {
                 let mut tld = domain.get_full_domain();
@@ -475,7 +481,7 @@ impl WhoIs {
                             Some(server) => server,
                             None => {
                                 return Err(WhoIsError::MapError(
-                                    "No whois server is known for this kind of object.",
+                                    "No whois server is known for this kind of object.".to_string(),
                                 ))
                             }
                         }
@@ -484,14 +490,14 @@ impl WhoIs {
 
                 if server.punycode {
                     let punycode_domain = domain_to_ascii(domain.get_full_domain()).unwrap();
-                    Self::lookup_inner(server, &punycode_domain, options.timeout, options.follow)
+                    Self::lookup_inner(server, &punycode_domain, options.timeout, options.follow).await
                 } else {
                     Self::lookup_inner(
                         server,
                         domain.get_full_domain(),
                         options.timeout,
                         options.follow,
-                    )
+                    ).await
                 }
             }
         }
