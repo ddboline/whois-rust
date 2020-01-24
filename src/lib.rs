@@ -52,8 +52,8 @@ pub use validators;
 
 use async_std::fs::File;
 use async_std::future::{timeout as async_timeout, TimeoutError};
-use async_std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use async_std::io::prelude::{ReadExt, WriteExt};
+use async_std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -304,7 +304,9 @@ impl WhoIs {
                     }
                 }
             }
-            None => return Err(WhoIsError::MapError("Cannot find `_` in the server list.".to_string())),
+            None => {
+                return Err(WhoIsError::MapError("Cannot find `_` in the server list.".to_string()))
+            }
         };
 
         let mut new_map: HashMap<String, WhoIsServerValue> = HashMap::with_capacity(map.len());
@@ -393,9 +395,11 @@ impl WhoIs {
 
         client.flush().await?;
 
-        let mut query_result = String::new();
+        let mut buf = Vec::new();
 
-        client.read_to_string(&mut query_result).await?;
+        client.read_to_end(&mut buf).await?;
+
+        let query_result = String::from_utf8_lossy(&buf);
 
         if follow > 0 {
             if let Some(c) = REF_SERVER_RE.captures(&query_result) {
@@ -410,7 +414,7 @@ impl WhoIs {
             }
         }
 
-        Ok(query_result)
+        Ok(query_result.into_owned())
     }
 
     async fn lookup_inner(
@@ -442,14 +446,16 @@ impl WhoIs {
                     Some(server) => server,
                     None => &self.ip,
                 };
-                Self::lookup_inner(server, ipv4.get_full_ipv4(), options.timeout, options.follow).await
+                Self::lookup_inner(server, ipv4.get_full_ipv4(), options.timeout, options.follow)
+                    .await
             }
             Target::IPv6(ipv6) => {
                 let server = match &options.server {
                     Some(server) => server,
                     None => &self.ip,
                 };
-                Self::lookup_inner(server, ipv6.get_full_ipv6(), options.timeout, options.follow).await
+                Self::lookup_inner(server, ipv6.get_full_ipv6(), options.timeout, options.follow)
+                    .await
             }
             Target::Domain(domain) => {
                 let mut tld = domain.get_full_domain();
@@ -490,14 +496,16 @@ impl WhoIs {
 
                 if server.punycode {
                     let punycode_domain = domain_to_ascii(domain.get_full_domain()).unwrap();
-                    Self::lookup_inner(server, &punycode_domain, options.timeout, options.follow).await
+                    Self::lookup_inner(server, &punycode_domain, options.timeout, options.follow)
+                        .await
                 } else {
                     Self::lookup_inner(
                         server,
                         domain.get_full_domain(),
                         options.timeout,
                         options.follow,
-                    ).await
+                    )
+                    .await
                 }
             }
         }
