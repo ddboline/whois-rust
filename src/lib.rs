@@ -55,8 +55,8 @@ extern crate lazy_static;
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use async_std::io::{self, Read, Write};
+use async_std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
 
