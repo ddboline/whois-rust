@@ -408,9 +408,11 @@ impl WhoIs {
 
         client.flush()?;
 
-        let mut query_result = String::new();
+        let mut buf = Vec::new();
 
-        client.read_to_string(&mut query_result)?;
+        client.read_to_end(&mut buf)?;
+
+        let query_result = String::from_utf8_lossy(&buf);
 
         if follow > 0 {
             if let Some(c) = REF_SERVER_RE.captures(&query_result) {
@@ -425,7 +427,7 @@ impl WhoIs {
             }
         }
 
-        Ok(query_result)
+        Ok(query_result.into_owned())
     }
 
     /// Lookup a domain or an IP.
