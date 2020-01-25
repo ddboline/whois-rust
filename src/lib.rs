@@ -54,6 +54,7 @@ use async_std::fs::File;
 use async_std::future::{timeout as async_timeout, TimeoutError};
 use async_std::io::prelude::{ReadExt, WriteExt};
 use async_std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use async_std::task;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -269,6 +270,10 @@ impl WhoIs {
         let map: Map<String, Value> = serde_json::from_slice(&buf)?;
 
         Self::from_inner(map)
+    }
+
+    pub fn from_path_sync<P: AsRef<Path>>(path: P) -> Result<WhoIs, WhoIsError> {
+        task::block_on(Self::from_path(path))
     }
 
     /// Read the list of WHOIS servers (JSON data) from a string to create a `WhoIs` instance.
@@ -509,5 +514,9 @@ impl WhoIs {
                 }
             }
         }
+    }
+
+    pub fn lookup_sync(&self, options: WhoIsLookupOptions) -> Result<String, WhoIsError> {
+        task::block_on(self.lookup(options))
     }
 }

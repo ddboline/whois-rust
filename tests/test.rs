@@ -14,3 +14,18 @@ async fn test() -> Result<(), WhoIsError> {
     println!("{}", result);
     Ok(())
 }
+
+#[test]
+fn test_sync() -> Result<(), WhoIsError> {
+    let who = WhoIs::from_path_sync("tests/data/servers.json")?;
+
+    let result = who.lookup_sync(WhoIsLookupOptions::from_string("magiclen.org")?)?;
+    println!("{}", result);
+
+    let result = who.lookup_sync(WhoIsLookupOptions::from_string("66.42.43.17")?)?;
+    println!("{}", result);
+
+    let result = who.lookup_sync(WhoIsLookupOptions::from_string("fe80::5400:1ff:feaf:b71")?)?;
+    println!("{}", result);
+    Ok(())
+}
