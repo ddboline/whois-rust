@@ -25,23 +25,29 @@ This is a simple example of **servers.json**.
 Then, use the `from_path` (or `from_string` if your JSON data is in-memory) associated function to create a `WhoIs` instance.
 
 ```rust,ignore
-extern crate whois_rust;
-
 use whois_rust::WhoIs;
+# use whois_rust::WhoIsError;
 
-let whois = WhoIs::from_path("/path/to/servers.json").unwrap();
+# #[tokio::main]
+# async fn main() -> Result<(), WhoIsError> {
+let whois = WhoIs::from_path("tests/data/servers.json").await?;
+# Ok(())
+# }
 ```
 
 Use the `lookup` method and input a `WhoIsLookupOptions` instance to lookup a domain or an IP.
 
 ```rust,ignore
-extern crate whois_rust;
-
 use whois_rust::{WhoIs, WhoIsLookupOptions};
+# use whois_rust::WhoIsError;
 
-let whois = WhoIs::from_path("/path/to/servers.json").unwrap();
+# #[tokio::main]
+# async fn main() -> Result<(), WhoIsError> {
 
-let result: String = whois.lookup(WhoIsLookupOptions::from_string("magiclen.org").unwrap()).unwrap();
+let whois = WhoIs::from_path("tests/data/servers.json").await?;
+
+let result: String = whois.lookup(WhoIsLookupOptions::from_string("magiclen.org").unwrap()).await?;
+# Ok(())}
 ```
 */
 
@@ -50,14 +56,15 @@ use lazy_static::lazy_static;
 pub use serde_json;
 pub use validators;
 
-use async_std::fs::File;
-use async_std::future::{timeout as async_timeout, TimeoutError};
-use async_std::io::prelude::{ReadExt, WriteExt};
-use async_std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::collections::HashMap;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
 use thiserror::Error;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::time::{timeout as async_timeout, Elapsed as TimeoutError};
 
 use serde_json::{Map, Value};
 use validators::domain::{DomainError, DomainUnlocalhostableWithoutPort};
@@ -362,7 +369,7 @@ impl WhoIs {
         };
 
         let mut client = if let Some(timeout) = timeout {
-            let socket_addrs: Vec<SocketAddr> = addr.to_socket_addrs().await?.collect();
+            let socket_addrs: Vec<SocketAddr> = addr.to_socket_addrs()?.collect();
 
             let mut client = None;
 
