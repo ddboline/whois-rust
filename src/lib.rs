@@ -56,21 +56,27 @@ use lazy_static::lazy_static;
 pub use serde_json;
 pub use validators;
 
-use std::collections::HashMap;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::Path;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    net::{SocketAddr, ToSocketAddrs},
+    path::Path,
+    time::Duration,
+};
 use thiserror::Error;
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::time::{timeout as async_timeout, Elapsed as TimeoutError};
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    time::{timeout as async_timeout, Elapsed as TimeoutError},
+};
 
 use serde_json::{Map, Value};
-use validators::domain::{DomainError, DomainUnlocalhostableWithoutPort};
-use validators::host::{Host, HostLocalable};
-use validators::ipv4::{IPv4Error, IPv4LocalableWithoutPort};
-use validators::ipv6::{IPv6Error, IPv6LocalableWithoutPort};
+use validators::{
+    domain::{DomainError, DomainUnlocalhostableWithoutPort},
+    host::{Host, HostLocalable},
+    ipv4::{IPv4Error, IPv4LocalableWithoutPort},
+    ipv6::{IPv6Error, IPv6LocalableWithoutPort},
+};
 
 use regex::Regex;
 
@@ -312,7 +318,9 @@ impl WhoIs {
                 }
             }
             None => {
-                return Err(WhoIsError::MapError("Cannot find `_` in the server list.".to_string()))
+                return Err(WhoIsError::MapError(
+                    "Cannot find `_` in the server list.".to_string(),
+                ))
             }
         };
 
@@ -325,17 +333,16 @@ impl WhoIs {
             }
         }
 
-        Ok(WhoIs {
-            map: new_map,
-            ip,
-        })
+        Ok(WhoIs { map: new_map, ip })
     }
 
     async fn connect_timeout(
         addr: &SocketAddr,
         timeout: Duration,
     ) -> Result<TcpStream, WhoIsError> {
-        async_timeout(timeout, TcpStream::connect(addr)).await?.map_err(Into::into)
+        async_timeout(timeout, TcpStream::connect(addr))
+            .await?
+            .map_err(Into::into)
     }
 
     async fn _lookup_inner(
@@ -395,9 +402,13 @@ impl WhoIs {
         };
 
         if let Some(query) = &server.query {
-            client.write_all(query.replace("$addr", text).as_bytes()).await?;
+            client
+                .write_all(query.replace("$addr", text).as_bytes())
+                .await?;
         } else {
-            client.write_all(DEFAULT_WHOIS_HOST_QUERY.replace("$addr", text).as_bytes()).await?;
+            client
+                .write_all(DEFAULT_WHOIS_HOST_QUERY.replace("$addr", text).as_bytes())
+                .await?;
         }
 
         client.flush().await?;
@@ -453,16 +464,26 @@ impl WhoIs {
                     Some(server) => server,
                     None => &self.ip,
                 };
-                Self::lookup_inner(server, ipv4.get_full_ipv4(), options.timeout, options.follow)
-                    .await
+                Self::lookup_inner(
+                    server,
+                    ipv4.get_full_ipv4(),
+                    options.timeout,
+                    options.follow,
+                )
+                .await
             }
             Target::IPv6(ipv6) => {
                 let server = match &options.server {
                     Some(server) => server,
                     None => &self.ip,
                 };
-                Self::lookup_inner(server, ipv6.get_full_ipv6(), options.timeout, options.follow)
-                    .await
+                Self::lookup_inner(
+                    server,
+                    ipv6.get_full_ipv6(),
+                    options.timeout,
+                    options.follow,
+                )
+                .await
             }
             Target::Domain(domain) => {
                 let mut tld = domain.get_full_domain();
